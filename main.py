@@ -5,7 +5,7 @@ import datetime, time, os
 import numpy as np
 from threading import Thread
 
-global capture, rec_frame, grey, switch, face, rec, out, cap
+global capture, rec_frame, grey, switch, face, rec, out
 outputFrame = None
 capture = 0
 grey = 0
@@ -28,12 +28,11 @@ camera = cv2.VideoCapture(0)
 # RTSP example
 # "rtsp://zephyr.rtsp.stream/pattern?streamKey=79d685bd2d7ebea91e8c2bac5543e69a"
 # "rtsp://zephyr.rtsp.stream/movie?streamKey=4a49ce5a8a03fb76de26daaa2d3eda00"
-cap = cv2.VideoCapture("rtsp://zephyr.rtsp.stream/movie?streamKey=4a49ce5a8a03fb76de26daaa2d3eda00")
 
+NUMBER_OF_CAMERA = 4
 
-print("Connected to RTSP camera.")
-time.sleep(2.0)
-
+address = []
+cap = []
 # make shots directory to save pics
 try:
     os.mkdir('./shots')
@@ -41,9 +40,13 @@ except OSError as error:
     pass
 
 def connectRTSP(source):
-    global cap
-    cap = cv2.VideoCapture(source)
-    print("Connected to RTSP camera")
+    if len(cap) < NUMBER_OF_CAMERA:
+        address.append(source)
+        cap.append(cv2.VideoCapture(source))
+    else:
+        address[len(cap) % NUMBER_OF_CAMERA] = source
+        cap[len(cap) % NUMBER_OF_CAMERA] = cv2.VideoCapture(source)
+    print(f"Connected to RTSP camera as 'Camera {(len(cap) - 1) % NUMBER_OF_CAMERA}' \nAddress: {source}")
     time.sleep(2.0)
 
 def record(out):
@@ -105,51 +108,61 @@ def generateLocalCamera():  # generate frame by frame from camera
             yield (b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
-def generateRTSPCamera():
+def generateRTSPCamera(camID):
+    def generate():
     # grab global references to the output frame and lock variables
-    global outputFrame, lock
-    if cap.isOpened():
-        # loop over frames from the output stream
-        while True:
-            ret_val, frame = cap.read()
-            if not ret_val:
-                continue
-            if frame.shape:
-                frame = cv2.resize(frame, (640,360))
-                with lock:
-                    outputFrame = frame.copy()
+        global lock
+        if camID < len(cap) and cap[camID].isOpened():
+            # loop over frames from the output stream
+            while True:
+                ret_val, frame = cap[camID].read()
+                if not ret_val:
+                    continue
+                if frame.shape:
+                    frame = cv2.resize(frame, (640,360))
+                    with lock:
+                        outputFrame = frame.copy()
 
-            # wait until the lock is acquired
-            with lock:
-                # check if the output frame is available, otherwise skip
-                # the iteration of the loop
-                if outputFrame is None:
-                    continue
-    
-                # encode the frame in JPEG format
-                (flag, encodedImage) = cv2.imencode(".jpg", outputFrame)
-    
-                # ensure the frame was successfully encoded
-                if not flag:
-                    continue
-    
-            # yield the output frame in the byte format
-            yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
-                bytearray(encodedImage) + b'\r\n')
-    else:
-        print('camera open failed')
+                # wait until the lock is acquired
+                with lock:
+                    # check if the output frame is available, otherwise skip
+                    # the iteration of the loop
+                    if outputFrame is None:
+                        continue
+        
+                    # encode the frame in JPEG format
+                    (flag, encodedImage) = cv2.imencode(".jpg", outputFrame)
+        
+                    # ensure the frame was successfully encoded
+                    if not flag:
+                        continue
+        
+                # yield the output frame in the byte format
+                yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + 
+                    bytearray(encodedImage) + b'\r\n')
+        else:
+            print(f'Camera {camID} open failed')
+    return generate
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/video_feed')
-def video_feed():
+@app.route('/video0')
+def video0():
     return Response(generateLocalCamera(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
-@app.route('/video')
-def video():
-    return Response(generateRTSPCamera(), mimetype='multipart/x-mixed-replace; boundary=frame')
+@app.route('/video1')
+def video1():
+    return Response(generateRTSPCamera(0)(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video2')
+def video2():
+    return Response(generateRTSPCamera(1)(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/video3')
+def video3():
+    return Response(generateRTSPCamera(2)(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/requests', methods=['POST', 'GET'])
 def tasks():
@@ -184,7 +197,6 @@ def tasks():
             elif rec == False:
                 out.release()
         elif request.form.get('rtsp'):
-            print(request.form['rtsp'])
             connectRTSP(request.form['rtsp'])
 
     elif request.method == 'GET':
