@@ -1,6 +1,6 @@
 # RTSP example
-# "rtsp://zephyr.rtsp.stream/pattern?streamKey=79d685bd2d7ebea91e8c2bac5543e69a"
-# "rtsp://zephyr.rtsp.stream/movie?streamKey=4a49ce5a8a03fb76de26daaa2d3eda00"
+# "rtsp://zephyr.rtsp.stream/pattern?streamKey=9df7682da342649c100f2b2fc72bc5e5"
+# "rtsp://zephyr.rtsp.stream/movie?streamKey=9fa8cbe774ecc564280bdefe1c35fa86"
 
 from flask import Flask, render_template, Response, request
 import cv2
@@ -11,6 +11,10 @@ import numpy as np
 from threading import Thread, Lock
 from pathlib import Path
 
+import pyautogui
+import pygetwindow as gw
+import sys
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
@@ -20,6 +24,7 @@ NUMBER_OF_CAMERA = 4
 params = {
     'rec_frame' : None,
     'outputFrame' : None,
+    'detect' : False,
     'grey' : False,
     'face' : False, 
     'rec' : False,
@@ -58,7 +63,23 @@ def record(out):
     while params['rec']:
         time.sleep(0.05)
         out.write(params['rec_frame'])
-
+def recordFull(out, w):
+    while params['rec']:
+        # make a screenshot
+        img = pyautogui.screenshot(region=(w.left, w.top, w.width, w.height))
+        # convert these pixels to a proper numpy array to work with OpenCV
+        frame = np.array(img)
+        # convert colors from BGR to RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        frame = cv2.putText(
+            frame,
+            "Recording...", (50, 50),
+            cv2.FONT_HERSHEY_SIMPLEX, 1,
+            (0, 0, 255), 4)
+        
+        # write the frame
+        out.write(frame)
 
 def detect_face(frame):
     h, w = frame.shape[:2]
@@ -83,32 +104,8 @@ def detect_face(frame):
         pass
     return frame
 
-
-def generateLocalCamera():  # generate frame by frame from camera
-    while True:
-        success, frame = params['camera'].read()
-        if success:
-            if params['face']:
-                frame = detect_face(frame)
-            if params['grey']:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            if params['rec']:
-                params['rec_frame'] = frame
-                frame = cv2.putText(
-                    cv2.flip(frame, 1),
-                    "Recording...", (0, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1,
-                    (0, 0, 255), 4)
-                frame = cv2.flip(frame, 1)
-
-            ret, buffer = cv2.imencode('.jpg', cv2.flip(frame, 1))
-            if not ret:
-                continue
-
-            frame = buffer.tobytes()
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
+def detect_overlap():
+    return render_template('index.html', calculatedTime=time.time())
 
 def generateRTSPCamera(camID):
     def generate():
@@ -144,34 +141,34 @@ def generateRTSPCamera(camID):
             print(f'Camera {camID} open failed')
     return generate
 
-
 @app.route('/')
 def index():
     return render_template('index.html')
 
-
 @app.route('/requests', methods=['POST', 'GET'])
 def tasks():
     if request.method == 'POST':
+        if request.form.get('detect') == 'Detect Overlap': detect_overlap()
         if request.form.get('grey') == 'Grey': params['grey'] = not params['grey']
         if request.form.get('face') == 'Face Only': params['face'] = not params['face']
         if params['face']: time.sleep(4)
-        if request.form.get('stop') == 'Webcam':
-            if params['switch'] == 1:
-                params['camera'].release()
-                cv2.destroyAllWindows()
-            else:
-                params['camera'] = cv2.VideoCapture(0)
-            params['switch'] = not params['switch']
-        elif request.form.get('rec') == 'Start/Stop Recording':
+        if request.form.get('rec') == 'Start/Stop Recording':
             params['rec'] = not params['rec']
             if params['rec']:
                 now = datetime.datetime.now()
                 fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                
+                # search for the window, getting the first matched window with the title
+                w = gw.getWindowsWithTitle("Chrome")[0]
+                # activate the window
+                w.activate()
+                
                 params['out'] = cv2.VideoWriter('vid_{}.avi'.format(
-                    str(now).replace(":", '')), fourcc, 20.0, (640, 480))
+                    str(now).replace(":", '')), fourcc, 20.0, (w.width, w.height))
 
-                thread = Thread(target=record, args=[params['out'], ])
+                thread = Thread(target=recordFull, args=[params['out'], w])
+
+                # thread = Thread(target=record, args=[params['out']])
                 thread.start()
             elif params['rec'] == False:
                 params['out'].release()
@@ -181,10 +178,6 @@ def tasks():
     elif request.method == 'GET':
         return render_template('index.html')
     return render_template('index.html')
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(generateLocalCamera(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 @app.route('/video/<camID>')
