@@ -131,7 +131,7 @@ def detect_overlap():
         rows.append(np.hstack([imgs[-1] if len(imgs) % 2 else blank, blank]))
         img = np.vstack(rows)
         (flag, buffer) = cv2.imencode(".jpg", img)
-        print("img:", img.shape)
+
         # ensure the frame was successfully encoded
         if not flag:
             continue
@@ -196,11 +196,14 @@ def tasks():
             if (params['detect'] == False):
                 if len(params['cap']) == 1:
                     params['detect'] = True
-                    detect_overlap()
+                    detect_thread = Thread(target=detect_overlap)
+                    detect_thread.start()
             else:
                 params['detect'] = False
                 
         if request.form.get('grey') == 'Grey': params['grey'] = not params['grey']
+        if request.form.get('face') == 'Face Only': params['face'] = not params['face']
+        if params['face']: time.sleep(4)
         if request.form.get('rec') == 'Start/Stop Recording':
             params['rec'] = not params['rec']
             if params['rec']:
@@ -241,7 +244,7 @@ def video_overlap():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':
-    app.run(use_reloader=False)
+    app.run(debug=True)
 
 for c in params['cap']: c.release()
 params['camera'].release()
