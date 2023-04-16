@@ -15,6 +15,8 @@ import pyautogui
 import pygetwindow as gw
 import sys
 
+from overlap import overlap
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))
@@ -32,7 +34,15 @@ params = {
     'camera' : cv2.VideoCapture(0),
     'lock' : Lock(),
     'address' : [],
-    'cap' : []
+    'cap' : [],
+    'nextCamId' : 0
+}
+
+images = {
+    'image1' : None,
+    'image2' : None,
+    'image3' : None,
+    'image4' : None
 }
 
 # instatiate flask app
@@ -51,13 +61,17 @@ def connectRTSP(source):
         params['address'].append(source)
         params['cap'].append(cv2.VideoCapture(source))
     else:
-        params['address'][len(params['cap']) % NUMBER_OF_CAMERA] = source
-        params['cap'][len(params['cap']) % NUMBER_OF_CAMERA] = cv2.VideoCapture(source)
+        if (params['nextCamId'] == NUMBER_OF_CAMERA): params['nextCamId'] = 0
+        params['address'][params['nextCamId']] = source
+        params['cap'][params['nextCamId']] = cv2.VideoCapture(source)
+    
+    params['nextCamId'] += 1
+    
     print(
         f"Connected to RTSP camera as 'Camera {(len(params['cap']) - 1) % NUMBER_OF_CAMERA}")
     print(f"Address: {source}")
+    print(params['cap'][0].isOpened())
     time.sleep(2.0)
-
 
 def record(out):
     while params['rec']:
@@ -105,7 +119,12 @@ def detect_face(frame):
     return frame
 
 def detect_overlap():
-    return render_template('index.html', calculatedTime=time.time())
+    while params['detect']:
+        img1 = params['cap'][0].read()
+        img2 = params['cap'][1].read()
+        [images['image1'], images['image2']], t = overlap([img1, img2])
+        time.sleep(1)
+    return
 
 def generateRTSPCamera(camID):
     def generate():
@@ -113,6 +132,11 @@ def generateRTSPCamera(camID):
             # loop over frames from the output stream
             while True:
                 ret_val, frame = params['cap'][camID].read()
+
+                if params['detect']:
+                    if images['image' + str(camID + 1)] != None:
+                        frame = images['image' + str(camID + 1)]
+
                 if not ret_val:
                     continue
                 if frame.shape:
@@ -128,12 +152,14 @@ def generateRTSPCamera(camID):
                         continue
 
                     # encode the frame in JPEG format
-                    (flag, encodedImage) = cv2.imencode(".jpg", outputFrame)
+                    (flag, buffer) = cv2.imencode(".jpg", outputFrame)
 
                     # ensure the frame was successfully encoded
                     if not flag:
                         continue
-
+                    
+                    encodedImage = buffer.tobytes()
+                    
                 # yield the output frame in the byte format
                 yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
                       bytearray(encodedImage) + b'\r\n')
@@ -148,7 +174,15 @@ def index():
 @app.route('/requests', methods=['POST', 'GET'])
 def tasks():
     if request.method == 'POST':
-        if request.form.get('detect') == 'Detect Overlap': detect_overlap()
+        if request.form.get('detect') == 'Detect Overlap': 
+            if (params['detect'] == False):
+                if len(params['cap']) == 2:
+                    params['detect'] = True
+                    detect_thread = Thread(target=detect_overlap)
+                    detect_thread.start()
+            else:
+                params['detect'] = False
+                
         if request.form.get('grey') == 'Grey': params['grey'] = not params['grey']
         if request.form.get('face') == 'Face Only': params['face'] = not params['face']
         if params['face']: time.sleep(4)

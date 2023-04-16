@@ -12,7 +12,7 @@ input[type=submit] {
 input[type=text] {
     background-color: white;
     border: none;
-    color: white;
+    color: black;
     padding: 16px 32px;
     text-decoration: none;
     margin: 4px 2px;
