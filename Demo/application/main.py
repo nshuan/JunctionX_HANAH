@@ -59,18 +59,19 @@ params['net'] = cv2.dnn.readNetFromCaffe(str(ROOT / 'saved_model/deploy.prototxt
 def connectRTSP(source):
     if len(params['cap']) < NUMBER_OF_CAMERA:
         params['address'].append(source)
-        params['cap'].append(cv2.VideoCapture(source))
+        if os.environ.get('WERKZEUG_RUN_MAIN') or Flask.debug is False:
+            params['cap'].append(cv2.VideoCapture(source))
     else:
         if (params['nextCamId'] == NUMBER_OF_CAMERA): params['nextCamId'] = 0
         params['address'][params['nextCamId']] = source
-        params['cap'][params['nextCamId']] = cv2.VideoCapture(source)
+        if os.environ.get('WERKZEUG_RUN_MAIN') or Flask.debug is False:
+            params['cap'][params['nextCamId']] = cv2.VideoCapture(source)   
     
     params['nextCamId'] += 1
     
     print(
         f"Connected to RTSP camera as 'Camera {(len(params['cap']) - 1) % NUMBER_OF_CAMERA}")
     print(f"Address: {source}")
-    print(params['cap'][0].isOpened())
     time.sleep(2.0)
 
 def record(out):
@@ -120,11 +121,26 @@ def detect_face(frame):
 
 def detect_overlap():
     while params['detect']:
-        img1 = params['cap'][0].read()
-        img2 = params['cap'][1].read()
-        [images['image1'], images['image2']], t = overlap([img1, img2])
-        time.sleep(1)
-    return
+        imgs, t, polygons = overlap([cap.read()[1] for cap in params['cap']])
+        for i in range(len(imgs)):
+            imgs[i] = cv2.resize(imgs[i], (640, 480))
+        rows = []
+        for i in range(len(imgs)//2):
+            rows.append(np.hstack([imgs[2*i], imgs[2*i + 1]]))
+        blank = np.zeros_like(imgs[0])
+        rows.append(np.hstack([imgs[-1] if len(imgs) % 2 else blank, blank]))
+        img = np.vstack(rows)
+        (flag, buffer) = cv2.imencode(".jpg", img)
+
+        # ensure the frame was successfully encoded
+        if not flag:
+            continue
+        
+        encodedImage = buffer.tobytes()
+
+        # yield the output frame in the byte format
+        yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
+                bytearray(encodedImage) + b'\r\n')
 
 def generateRTSPCamera(camID):
     def generate():
@@ -133,13 +149,15 @@ def generateRTSPCamera(camID):
             while True:
                 ret_val, frame = params['cap'][camID].read()
 
-                if params['detect']:
-                    if images['image' + str(camID + 1)] != None:
-                        frame = images['image' + str(camID + 1)]
+                if params['detect'] == True:
+                    # if images['image' + str(camID + 1)] != None:
+                    frame = images['image' + str(camID + 1)]
+                    # cv2.imshow('a', frame)
+                    # cv2.waitKey()
 
                 if not ret_val:
                     continue
-                if frame.shape:
+                if frame is not None and frame.shape:
                     frame = cv2.resize(frame, (640, 360))
                     with params['lock']:
                         outputFrame = frame.copy()
@@ -159,7 +177,7 @@ def generateRTSPCamera(camID):
                         continue
                     
                     encodedImage = buffer.tobytes()
-                    
+
                 # yield the output frame in the byte format
                 yield(b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' +
                       bytearray(encodedImage) + b'\r\n')
@@ -176,7 +194,7 @@ def tasks():
     if request.method == 'POST':
         if request.form.get('detect') == 'Detect Overlap': 
             if (params['detect'] == False):
-                if len(params['cap']) == 2:
+                if len(params['cap']) == 1:
                     params['detect'] = True
                     detect_thread = Thread(target=detect_overlap)
                     detect_thread.start()
@@ -217,6 +235,12 @@ def tasks():
 @app.route('/video/<camID>')
 def video(camID):
     return Response(generateRTSPCamera(camID=int(camID))(),
+                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/video_overlap')
+def video_overlap():
+    return Response(detect_overlap(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 if __name__ == '__main__':

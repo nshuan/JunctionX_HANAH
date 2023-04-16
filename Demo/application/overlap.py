@@ -204,14 +204,14 @@ if __name__ == '__main__':
                 ret3, i3 = vid3.read()
                 # ret4, i4 = vid4.read()
                 imgs, t, polygons = overlap([i1, i2, i3])
-                imgs[0] = cv2.resize(imgs[0], (640, 480))
-                imgs[1] = cv2.resize(imgs[1], (640, 480))
-                imgs[2] = cv2.resize(imgs[2], (640, 480))
-                # imgs[3] = cv2.resize(imgs[3], (640, 480))
-                row1 = np.hstack([imgs[0], imgs[1]])
-                blank = np.zeros_like(imgs[2])
-                row2 = np.hstack([imgs[2], blank])
-                img = np.vstack([row1, row2])
+                for i in range(len(imgs)):
+                    imgs[i] = cv2.resize(imgs[i], (640, 480))
+                rows = []
+                for i in range(len(imgs)//2):
+                    rows.append(np.hstack([imgs[2*i], imgs[2*i + 1]]))
+                blank = np.zeros_like(imgs[0])
+                rows.append(np.hstack([imgs[-1] if len(imgs) % 2 else blank, blank]))
+                img = np.vstack(rows)
                 print(f"Time: {t}s")
                 # cv2.imshow("Camera 0", imgs[0])
                 # cv2.imshow("Camera 1", imgs[1])
