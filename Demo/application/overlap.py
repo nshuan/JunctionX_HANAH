@@ -3,19 +3,20 @@ import numpy as np
 from datetime import datetime
 import os
 import matplotlib.pyplot as plt
+import shapely
 from shapely.geometry import Polygon
 
 from scipy.spatial import ConvexHull
 from time import perf_counter_ns as clock
 
 THRESHOLD = 0.6
-NUM_ITERS = 100
+NUM_ITERS = 5
 
 BLUE = (255, 0, 0)
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
 
-def getPoints(image1, image2, point_map, inliers=None, max_points=1000):
+def getPoints(image1, image2, point_map, inliers=None, max_points=20):
     rows1, cols1 = image1.shape
     rows2, cols2 = image2.shape
 
@@ -31,9 +32,6 @@ def getPoints(image1, image2, point_map, inliers=None, max_points=1000):
         color = BLUE if inliers is None else (
             GREEN if (x1, y1, x2, y2) in inliers else RED)
         if color != RED:
-            cv2.circle(matchImage, point1, 5, BLUE, 1)
-            cv2.circle(matchImage, point2, 5, BLUE, 1)
-            cv2.line(matchImage, point1, point2, color, 1)
             ret_points[0].append(point1)
             ret_points[1].append(point2)
 
@@ -137,35 +135,60 @@ def _subOverlap(image1, image2, verbose=False):
     homography, inliers = RANSAC(point_map, verbose=verbose)
     return points0, points1
 
-def overlap(img1, img2, downscale=1):
+def overlap(imgs, downscale=1, log=False):
+    def poly_pts(poly):
+        vertices = np.array(poly.exterior.coords.xy).T
+        points = ConvexHull(vertices).vertices
+        x_hull = np.append(vertices[points,0], vertices[points,0][0])
+        y_hull = np.append(vertices[points,1], vertices[points,1][0])
+        return np.array(list(zip(x_hull, y_hull))).reshape(-1,1,2)
     start = clock()
-    img1 = cv2.resize(img1, (img1.shape[0]//downscale, img1.shape[1]//downscale))
-    img2 = cv2.resize(img2, (img2.shape[0]//downscale, img2.shape[1]//downscale))
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-    points = _subOverlap(gray1, gray2)
-    points0 = np.array(points[0], dtype=np.int32)
-    points1 = np.array(points[1], dtype=np.int32)
-    img_1 = cv2.polylines(img1, [points0], isClosed=True, color=(0,255,0), thickness=4)
-    img_2 = cv2.polylines(img2, [points1], isClosed=True, color=(0,255,0), thickness=4)
+    gray = []
+    polygons = []
+    for img in imgs:
+        img = cv2.resize(img, (int(img.shape[0]/downscale), int(img.shape[1]/downscale)))
+        gray.append(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
+        polygons.append(dict())
+
+    for i in range(len(imgs)):
+        j = (i + 1) % len(imgs)
+        points = _subOverlap(gray[i], gray[j])
+        points0 = np.array(points[0], dtype=np.int32)
+        points1 = np.array(points[1], dtype=np.int32)
+        polygons[i][j] = Polygon(zip(points0[:,0],points0[:,1]))
+        polygons[j][i] = Polygon(zip(points1[:,0],points1[:,1]))
+
+    ret_img = []
+    for i in range(len(imgs)):
+        poly = polygons[i][(i + 1) % len(imgs)]
+        poly = poly.intersection(polygons[i][(i - 1) % len(imgs)])
+        polygons[i] = poly_pts(poly)
+        img = imgs[i].copy()
+        ret_img.append(cv2.polylines(img, np.int32([polygons[i]]), isClosed=True, color=(0,255,0), thickness=4))
+
     finish = clock()
-    return img_1, img_2, (finish - start)/(1e9)
+    if log: return ret_img, (finish - start)/(1e9), polygons
+    return ret_img, (finish - start)/(1e9), None
 
 if __name__ == '__main__':
-    vid1 = cv2.VideoCapture("D:/video_data/dynamic_cam/192_168_5_101.mp4")
-    vid2 = cv2.VideoCapture("D:/video_data/dynamic_cam/192_168_5_103.mp4")
+    vid1 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_1.mp4")
+    vid2 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_2.mp4")
+    vid3 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_3.mp4")
+    vid4 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_4.mp4")
 
     while True:
         ret, i1 = vid1.read()
         if ret:
             ret2, i2 = vid2.read()
             if ret2:
-                img1, img2, t = overlap(i1, i2, 2)
-                img1 = cv2.resize(img1, (640, 480))
-                img2 = cv2.resize(img2, (640, 480))
+                ret3, i3 = vid3.read()
+                ret4, i4 = vid4.read()
+                imgs, t, polygons = overlap([i1, i2, i3])
+                row1 = np.hstack([imgs[0], imgs[1]])
+                blank = np.zeros_like(imgs[2])
+                row2 = np.hstack([imgs[2], blank])
+                img = np.vstack([row1, row2])
                 print(f"Time: {t}s")
-                cv2.imshow("Camera 1", img2)
-                cv2.imshow("Camera 0", img1)
+                cv2.imshow("Concat", img)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-            
