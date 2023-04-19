@@ -1,13 +1,17 @@
 import cv2
 import numpy as np
-from datetime import datetime
 import os
 import matplotlib.pyplot as plt
 import shapely
-from shapely.geometry import Polygon
 
-from scipy.spatial import ConvexHull
+from datetime import datetime
 from time import perf_counter_ns as clock
+
+from ultralytics import YOLO
+from ultralytics.yolo.utils.plotting import Annotator
+
+from shapely.geometry import Polygon
+from scipy.spatial import ConvexHull
 
 THRESHOLD = 0.6
 NUM_ITERS = 5
@@ -15,6 +19,7 @@ NUM_ITERS = 5
 BLUE = (255, 0, 0)
 GREEN = (0, 255, 0)
 RED = (0, 0, 255)
+
 
 def getPoints(image1, image2, point_map, inliers=None, max_points=20):
     rows1, cols1 = image1.shape
@@ -24,7 +29,8 @@ def getPoints(image1, image2, point_map, inliers=None, max_points=20):
     matchImage[:rows1, :cols1, :] = np.dstack([image1] * 3)
     matchImage[:rows2, cols1:cols1 + cols2, :] = np.dstack([image2] * 3)
 
-    small_point_map = [point_map[i] for i in np.random.choice(len(point_map), max_points)]
+    small_point_map = [point_map[i]
+                       for i in np.random.choice(len(point_map), max_points)]
     ret_points = [[], []]
     for x1, y1, x2, y2 in small_point_map:
         point1 = [int(x1), int(y1)]
@@ -38,11 +44,11 @@ def getPoints(image1, image2, point_map, inliers=None, max_points=20):
     ret_points[0] = np.array(ret_points[0])
     ret_points[1] = np.array(ret_points[1])
     points = ConvexHull(ret_points[0]).vertices
-    x_hull = np.append(ret_points[0][points,0], ret_points[0][points,0][0])
-    y_hull = np.append(ret_points[0][points,1], ret_points[0][points,1][0])
+    x_hull = np.append(ret_points[0][points, 0], ret_points[0][points, 0][0])
+    y_hull = np.append(ret_points[0][points, 1], ret_points[0][points, 1][0])
     points = ConvexHull(ret_points[1]).vertices
-    x_hull1 = np.append(ret_points[1][points,0], ret_points[1][points,0][0])
-    y_hull1 = np.append(ret_points[1][points,1], ret_points[1][points,1][0])
+    x_hull1 = np.append(ret_points[1][points, 0], ret_points[1][points, 0][0])
+    y_hull1 = np.append(ret_points[1][points, 1], ret_points[1][points, 1][0])
     return list(zip(x_hull, y_hull)), list(zip(x_hull1, y_hull1))
 
 
@@ -130,23 +136,26 @@ def _subOverlap(image1, image2, verbose=False):
     point_map = None
     if verbose:
         print('Creating point map...')
-    point_map, points0, points1 = createPointMap(image1, image2, verbose=verbose)
+    point_map, points0, points1 = createPointMap(
+        image1, image2, verbose=verbose)
 
     homography, inliers = RANSAC(point_map, verbose=verbose)
     return points0, points1
+
 
 def overlap(imgs, downscale=1, log=False):
     def poly_pts(poly):
         vertices = np.array(poly.exterior.coords.xy).T
         points = ConvexHull(vertices).vertices
-        x_hull = np.append(vertices[points,0], vertices[points,0][0])
-        y_hull = np.append(vertices[points,1], vertices[points,1][0])
-        return np.array(list(zip(x_hull, y_hull))).reshape(-1,1,2)
+        x_hull = np.append(vertices[points, 0], vertices[points, 0][0])
+        y_hull = np.append(vertices[points, 1], vertices[points, 1][0])
+        return np.array(list(zip(x_hull, y_hull))).reshape(-1, 1, 2)
     start = clock()
     gray = []
     polygons = []
     for img in imgs:
-        img = cv2.resize(img, (int(img.shape[0]/downscale), int(img.shape[1]/downscale)))
+        img = cv2.resize(
+            img, (int(img.shape[0]/downscale), int(img.shape[1]/downscale)))
         gray.append(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY))
         polygons.append(dict())
 
@@ -155,8 +164,8 @@ def overlap(imgs, downscale=1, log=False):
         points = _subOverlap(gray[i], gray[j])
         points0 = np.array(points[0], dtype=np.int32)
         points1 = np.array(points[1], dtype=np.int32)
-        polygons[i][j] = Polygon(zip(points0[:,0],points0[:,1]))
-        polygons[j][i] = Polygon(zip(points1[:,0],points1[:,1]))
+        polygons[i][j] = Polygon(zip(points0[:, 0], points0[:, 1]))
+        polygons[j][i] = Polygon(zip(points1[:, 0], points1[:, 1]))
 
     ret_img = []
     for i in range(len(imgs)):
@@ -164,17 +173,24 @@ def overlap(imgs, downscale=1, log=False):
         poly = poly.intersection(polygons[i][(i - 1) % len(imgs)])
         polygons[i] = poly_pts(poly)
         img = imgs[i].copy()
-        ret_img.append(cv2.polylines(img, np.int32([polygons[i]]), isClosed=True, color=(0,255,0), thickness=4))
+        ret_img.append(cv2.polylines(img, np.int32(
+            [polygons[i]]), isClosed=True, color=(0, 255, 0), thickness=3))
 
     finish = clock()
-    if log: return ret_img, (finish - start)/(1e9), polygons
+    if log:
+        return ret_img, (finish - start)/(1e9), polygons
     return ret_img, (finish - start)/(1e9), None
 
+
 if __name__ == '__main__':
-    vid1 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_1.mp4")
-    vid2 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_2.mp4")
-    vid3 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_3.mp4")
-    vid4 = cv2.VideoCapture("D:/video_data/Public_Test/videos/scene4cam_10/CAM_4.mp4")
+    vid1 = cv2.VideoCapture(
+        "D:/video_data/Public_Test/videos/scene4cam_10/CAM_1.mp4")
+    vid2 = cv2.VideoCapture(
+        "D:/video_data/Public_Test/videos/scene4cam_10/CAM_2.mp4")
+    vid3 = cv2.VideoCapture(
+        "D:/video_data/Public_Test/videos/scene4cam_10/CAM_3.mp4")
+    vid4 = cv2.VideoCapture(
+        "D:/video_data/Public_Test/videos/scene4cam_10/CAM_4.mp4")
 
     while True:
         ret, i1 = vid1.read()

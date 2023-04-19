@@ -40,8 +40,13 @@ input[value=ConnectRTSP]:hover {
 
 h2,
 h3,
-ol {
+ol,
+p {
     font-family: 'Montserrat';
+}
+
+p {
+    white-space: pre-line;
 }
 
 span {
